@@ -13,12 +13,21 @@ use std::process;
 pub mod error;
 pub mod filesystem;
 
+use filesize::PathExt;
+
 use crate::error::{Error, Result};
 use crate::filesystem::{self as fs, FileType};
 
 pub fn fatal(message: impl Display) -> ! {
     eprintln!("{}", message);
     process::exit(1);
+}
+
+fn is_file_remote(path: &Path) -> Result<bool> {
+    let metadata = fs::symlink_metadata(path)?;
+    let size = metadata.len();
+    let size_on_disk = path.size_on_disk_fast(&metadata)?;
+    Ok(size_on_disk == 0 && size > 0)
 }
 
 // The boolean returned signifies whether an error occurred (`true`) or not (`false`). The purpose
@@ -31,7 +40,9 @@ fn copy_file(source: &Path, source_type: Result<FileType>, dest: &Path) -> bool 
     fn __copy_file(source: &Path, source_type: Result<FileType>, dest: &Path) -> Result<bool> {
         match source_type? {
             FileType::Regular => {
-                fs::copy(source, dest)?;
+                if !is_file_remote(source)? {
+                    fs::copy(source, dest)?;
+                }
             }
             FileType::Directory => return copy_directory(source, dest),
             FileType::Symlink => fs::symlink(fs::read_link(source)?, dest)?,
@@ -151,15 +162,15 @@ fn file_names(sources: &[PathBuf]) -> Result<Vec<&OsStr>> {
     let errors = sources_by_name
         .values()
         .filter_map(|source_group| {
-                (source_group.len() > 1).then(|| {
+            (source_group.len() > 1).then(|| {
                 format!(
-                "{}: paths have the same file name and thus would be copied to the same destination",
-                source_group
-                    .iter()
-                    .map(|source| format!("{}", source.display()))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            )
+                    "{}: paths have the same file name and thus would be copied to the same destination",
+                    source_group
+                        .iter()
+                        .map(|source| format!("{}", source.display()))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
             })
         })
         .collect::<Vec<_>>();
